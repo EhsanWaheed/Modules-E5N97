@@ -1,0 +1,20 @@
+{
+    "sourceName": "Itachi TV",
+    "iconUrl": "https://www.google.com/s2/favicons?sz=128&domain_url=itachi.tv",
+    "author": {
+        "name": "Ehsan",
+        "icon": "https://github.com/github.png",
+        "url": "https://github.com/E5N97"
+    },
+    "version": "1.0.0",
+    "language": "English (SUB/DUB)",
+    "streamType": "HLS",
+    "quality": "1080p",
+    "baseUrl": "https://itachi.tv/",
+    "searchBaseUrl": "https://itachi.tv/search?q=%s",
+    "scriptUrl": "https://raw.githubusercontent.com/E5N97/Modules-E5N97/main/itachi.js",
+    "type": "anime",
+    "downloadSupport": false,
+    "asyncJS": true,
+    "softsub": true
+}
