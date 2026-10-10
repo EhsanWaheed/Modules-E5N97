@@ -1,27 +1,47 @@
+const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
 async function searchResults(keyword) {
     const searchUrl = `https://itachi.tv/search?q=${encodeURIComponent(keyword)}`;
-    const res = await fetch(searchUrl);
+    const res = await fetch(searchUrl, {
+        headers: {
+            "User-Agent": UA,
+            "Accept": "text/html,application/xhtml+xml"
+        }
+    });
+    
     const html = await res.text();
     const results = [];
 
-    // Split the HTML using the anchor class wrapping each search result
-    const blocks = html.split('<a class="group block min-w-0').slice(1);
+    // Split by anchor tags rather than specific classes to make it unbreakable
+    const blocks = html.split('<a ');
     
     for (const block of blocks) {
-        const titleMatch = block.match(/title="([^"]+)"/);
-        const hrefMatch = block.match(/href="([^"]+)"/);
-        const imgMatch = block.match(/src="\/_next\/image\?url=([^&"]+)/);
+        // Look for any link that routes to an anime page
+        const hrefMatch = block.match(/href="(\/anime\/[^"]+)"/);
+        if (!hrefMatch) continue;
 
-        if (titleMatch && hrefMatch) {
-            let imgUrl = "";
-            if (imgMatch) {
-                // Decode the Next.js optimized image URL for high-res posters
-                imgUrl = decodeURIComponent(imgMatch[1]);
-            }
-            
+        // Extract the title
+        const titleMatch = block.match(/title="([^"]+)"/);
+        const altMatch = block.match(/alt="([^"]+)"/);
+        const title = titleMatch ? titleMatch[1] : (altMatch ? altMatch[1] : "Unknown Anime");
+
+        // Extract the image, handling Next.js proxies if present
+        let imgUrl = "";
+        const imgMatch = block.match(/src="\/_next\/image\?url=([^&"]+)/);
+        if (imgMatch) {
+            imgUrl = decodeURIComponent(imgMatch[1]);
+        } else {
+            const rawImgMatch = block.match(/<img[^>]+src="([^"]+)"/);
+            if (rawImgMatch) imgUrl = rawImgMatch[1];
+        }
+        
+        const fullUrl = "https://itachi.tv" + hrefMatch[1];
+        
+        // Push the result if it hasn't been added already
+        if (!results.some(r => r.href === fullUrl)) {
             results.push({
-                title: titleMatch[1],
-                href: "https://itachi.tv" + hrefMatch[1],
+                title: decodeEntities(title),
+                href: fullUrl,
                 image: imgUrl
             });
         }
@@ -30,7 +50,6 @@ async function searchResults(keyword) {
     return JSON.stringify(results);
 }
 
-// Shirox requires a details route to load the description before displaying episodes
 async function extractDetails(url) {
     return JSON.stringify([{
         description: "Watch on Itachi TV",
@@ -40,25 +59,28 @@ async function extractDetails(url) {
 }
 
 async function extractEpisodes(url) {
-    const res = await fetch(url);
+    const res = await fetch(url, { headers: { "User-Agent": UA } });
     const html = await res.text();
     const episodes = [];
 
-    // Split the HTML using the anchor class wrapping each episode button
-    const blocks = html.split('<a class="group grid min-w-0').slice(1);
+    const blocks = html.split('<a ');
 
     for (const block of blocks) {
-        const hrefMatch = block.match(/href="([^"]+)"/);
+        // Look for watch routes instead of specific grid classes
+        const hrefMatch = block.match(/href="(\/watch\/[^"]+)"/);
+        if (!hrefMatch) continue;
+
         const epNumMatch = block.match(/>EP\s*(\d+)</); 
         const epTitleMatch = block.match(/<p[^>]*truncate[^>]*>([^<]+)<\/p>/);
 
-        if (hrefMatch) {
-            const epNum = epNumMatch ? parseInt(epNumMatch[1].trim(), 10) : episodes.length + 1;
-            const epTitle = epTitleMatch ? epTitleMatch[1].trim() : `Episode ${epNum}`;
-            
+        const epNum = epNumMatch ? parseInt(epNumMatch[1].trim(), 10) : episodes.length + 1;
+        const epTitle = epTitleMatch ? decodeEntities(epTitleMatch[1].trim()) : `Episode ${epNum}`;
+        const fullUrl = "https://itachi.tv" + hrefMatch[1];
+        
+        if (!episodes.some(e => e.href === fullUrl)) {
             episodes.push({
                 title: epTitle,
-                href: "https://itachi.tv" + hrefMatch[1],
+                href: fullUrl,
                 number: epNum,
                 season: 1
             });
@@ -69,22 +91,18 @@ async function extractEpisodes(url) {
 }
 
 async function extractStreamUrl(url) {
-    const res = await fetch(url);
+    const res = await fetch(url, { headers: { "User-Agent": UA } });
     const html = await res.text();
 
-    // Locate the Anilink iframe embedded in the player page
     const iframeMatch = html.match(/<iframe[^>]*src="([^"]+)"/);
     
     if (iframeMatch) {
-        // Clean the extracted URL by unescaping HTML entities
         const iframeUrl = iframeMatch[1].replace(/&amp;/g, '&');
 
         try {
-            // Fetch the iframe directly to scrape the raw video file
-            const iframeRes = await fetch(iframeUrl);
+            const iframeRes = await fetch(iframeUrl, { headers: { "User-Agent": UA } });
             const iframeHtml = await iframeRes.text();
 
-            // Search the iframe's source code for the raw .m3u8 streaming link
             const fileMatch = iframeHtml.match(/['"](https:\/\/[^'"]+\.m3u8[^'"]*)['"]/);
             if (fileMatch) {
                 return JSON.stringify({
@@ -104,6 +122,15 @@ async function extractStreamUrl(url) {
         }
     }
     
-    // Return none if extraction fails so Shirox knows to stop spinning
     return JSON.stringify({ type: "none" });
+}
+
+function decodeEntities(text) {
+    if (!text) return "";
+    return String(text)
+        .replace(/&amp;/g, '&')
+        .replace(/&#039;|&#x27;/g, "'")
+        .replace(/&quot;/g, '"')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>');
 }
