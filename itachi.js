@@ -1,5 +1,5 @@
-async function searchResults(query) {
-    const searchUrl = `https://itachi.tv/search?q=${encodeURIComponent(query)}`;
+async function searchResults(keyword) {
+    const searchUrl = `https://itachi.tv/search?q=${encodeURIComponent(keyword)}`;
     const res = await fetch(searchUrl);
     const html = await res.text();
     const results = [];
@@ -15,22 +15,31 @@ async function searchResults(query) {
         if (titleMatch && hrefMatch) {
             let imgUrl = "";
             if (imgMatch) {
-                // Next.js encodes the original image URL, so we decode it here for the app
+                // Decode the Next.js optimized image URL for high-res posters
                 imgUrl = decodeURIComponent(imgMatch[1]);
             }
             
             results.push({
-                name: titleMatch[1],
-                url: "https://itachi.tv" + hrefMatch[1],
+                title: titleMatch[1],
+                href: "https://itachi.tv" + hrefMatch[1],
                 image: imgUrl
             });
         }
     }
     
-    return results;
+    return JSON.stringify(results);
 }
 
-async function info(url) {
+// Shirox requires a details route to load the description before displaying episodes
+async function extractDetails(url) {
+    return JSON.stringify([{
+        description: "Watch on Itachi TV",
+        aliases: "Itachi",
+        airdate: ""
+    }]);
+}
+
+async function extractEpisodes(url) {
     const res = await fetch(url);
     const html = await res.text();
     const episodes = [];
@@ -44,22 +53,22 @@ async function info(url) {
         const epTitleMatch = block.match(/<p[^>]*truncate[^>]*>([^<]+)<\/p>/);
 
         if (hrefMatch) {
-            const epNum = epNumMatch ? epNumMatch[1].trim() : "";
+            const epNum = epNumMatch ? parseInt(epNumMatch[1].trim(), 10) : episodes.length + 1;
             const epTitle = epTitleMatch ? epTitleMatch[1].trim() : `Episode ${epNum}`;
             
             episodes.push({
-                title: `${epNum} - ${epTitle}`,
-                url: "https://itachi.tv" + hrefMatch[1]
+                title: epTitle,
+                href: "https://itachi.tv" + hrefMatch[1],
+                number: epNum,
+                season: 1
             });
         }
     }
 
-    return {
-        episodes: episodes
-    };
+    return JSON.stringify(episodes);
 }
 
-async function stream(url) {
+async function extractStreamUrl(url) {
     const res = await fetch(url);
     const html = await res.text();
 
@@ -78,23 +87,23 @@ async function stream(url) {
             // Search the iframe's source code for the raw .m3u8 streaming link
             const fileMatch = iframeHtml.match(/['"](https:\/\/[^'"]+\.m3u8[^'"]*)['"]/);
             if (fileMatch) {
-                return [{
-                    url: fileMatch[1],
-                    quality: "Auto",
-                    isHLS: true
-                }];
+                return JSON.stringify({
+                    type: "servers",
+                    streams: [{
+                        title: "Itachi TV HLS",
+                        streamUrl: fileMatch[1],
+                        headers: {}
+                    }],
+                    subtitles: "",
+                    subtitlesHeaders: {},
+                    allSubtitles: []
+                });
             }
         } catch (e) {
             console.error("Failed to parse iframe:", e);
         }
-
-        // Fallback: If raw extraction fails, hand the iframe URL to the app
-        return [{
-            url: iframeUrl,
-            quality: "Unknown",
-            isIframe: true
-        }];
     }
     
-    return [];
+    // Return none if extraction fails so Shirox knows to stop spinning
+    return JSON.stringify({ type: "none" });
 }
