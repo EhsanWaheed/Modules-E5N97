@@ -4,7 +4,7 @@
     "author": {
         "name": "Ehsan",
         "icon": "https://github.com/github.png",
-        "url": "https://github.com/E5N97"
+        "url": "https://github.com/EhsanWaheed"
     },
     "version": "1.0.0",
     "language": "English (SUB/DUB)",
@@ -12,7 +12,7 @@
     "quality": "1080p",
     "baseUrl": "https://itachi.tv/",
     "searchBaseUrl": "https://itachi.tv/search?q=%s",
-    "scriptUrl": "https://raw.githubusercontent.com/E5N97/Modules-E5N97/main/itachi.js",
+    "scriptUrl": "https://raw.githubusercontent.com/EhsanWaheed/Modules-E5N97/main/itachi.js",
     "type": "anime",
     "downloadSupport": false,
     "asyncJS": true,
