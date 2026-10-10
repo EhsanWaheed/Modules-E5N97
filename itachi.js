@@ -1,113 +1,161 @@
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
-// Custom network bridge to bypass iOS WebKit blocks
-async function shiroxFetch(url) {
-    const headers = {
-        "User-Agent": UA,
-        "Accept": "text/html,application/xhtml+xml",
-        "Referer": "https://itachi.tv/"
-    };
+// ==========================================
+// 🌐 NATIVE NETWORK BRIDGE
+// ==========================================
+async function soraFetch(url, options = { headers: {}, method: 'GET', body: null }) {
+    const headers = options.headers || {};
+    if (!headers["User-Agent"]) headers["User-Agent"] = UA;
+    if (!headers["Accept"]) headers["Accept"] = "text/html,application/xhtml+xml,application/json";
+    
     try {
         if (typeof fetchv2 !== 'undefined') {
-            // Use Shirox's native iOS fetch
-            const res = await fetchv2(url, headers, 'GET', null);
-            return res.data || (typeof res.text === 'function' ? await res.text() : String(res));
+            return await fetchv2(url, headers, options.method ?? 'GET', options.body ?? null);
         } else {
-            // Fallback for standard environments
-            const res = await fetch(url, { headers });
-            return await res.text();
+            return await fetch(url, { ...options, headers: headers });
         }
     } catch (e) {
-        console.error("Fetch failed:", e);
-        return "";
+        return null;
     }
 }
 
-async function searchResults(keyword) {
-    const searchUrl = `https://itachi.tv/search?q=${encodeURIComponent(keyword)}`;
-    const html = await shiroxFetch(searchUrl);
-    const results = [];
-
-    const blocks = html.split('<a ');
-    
-    for (const block of blocks) {
-        const hrefMatch = block.match(/href="(\/anime\/[^"]+)"/);
-        if (!hrefMatch) continue;
-
-        const titleMatch = block.match(/title="([^"]+)"/) || block.match(/alt="([^"]+)"/);
-        const title = titleMatch ? titleMatch[1] : "Unknown Anime";
-
-        let imgUrl = "";
-        const imgMatch = block.match(/src="\/_next\/image\?url=([^&"]+)/);
-        if (imgMatch) {
-            imgUrl = decodeURIComponent(imgMatch[1]);
-        } else {
-            const rawImgMatch = block.match(/<img[^>]+src="([^"]+)"/);
-            if (rawImgMatch) imgUrl = rawImgMatch[1];
-        }
-        
-        const fullUrl = "https://itachi.tv" + hrefMatch[1];
-        
-        if (!results.some(r => r.href === fullUrl)) {
-            results.push({
-                title: decodeEntities(title),
-                href: fullUrl,
-                image: imgUrl
-            });
-        }
-    }
-    return JSON.stringify(results);
-}
-
-async function extractDetails(url) {
-    return JSON.stringify([{ description: "Watch on Itachi TV", aliases: "Itachi TV", airdate: "" }]);
-}
-
-async function extractEpisodes(url) {
-    const html = await shiroxFetch(url);
-    const episodes = [];
-    const blocks = html.split('<a ');
-
-    for (const block of blocks) {
-        const hrefMatch = block.match(/href="(\/watch\/[^"]+)"/);
-        if (!hrefMatch) continue;
-
-        const epNumMatch = block.match(/>EP\s*(\d+)</); 
-        const epTitleMatch = block.match(/<p[^>]*truncate[^>]*>([^<]+)<\/p>/);
-
-        const epNum = epNumMatch ? parseInt(epNumMatch[1].trim(), 10) : episodes.length + 1;
-        const epTitle = epTitleMatch ? decodeEntities(epTitleMatch[1].trim()) : `Episode ${epNum}`;
-        const fullUrl = "https://itachi.tv" + hrefMatch[1];
-        
-        if (!episodes.some(e => e.href === fullUrl)) {
-            episodes.push({ title: epTitle, href: fullUrl, number: epNum, season: 1 });
-        }
-    }
-    return JSON.stringify(episodes);
-}
-
-async function extractStreamUrl(url) {
-    const html = await shiroxFetch(url);
-    const iframeMatch = html.match(/<iframe[^>]*src="([^"]+)"/);
-    
-    if (iframeMatch) {
-        const iframeUrl = iframeMatch[1].replace(/&amp;/g, '&');
-        try {
-            const iframeHtml = await shiroxFetch(iframeUrl);
-            const fileMatch = iframeHtml.match(/['"](https:\/\/[^'"]+\.m3u8[^'"]*)['"]/);
-            if (fileMatch) {
-                return JSON.stringify({
-                    type: "servers",
-                    streams: [{ title: "Itachi TV HLS", streamUrl: fileMatch[1], headers: {} }],
-                    subtitles: "", subtitlesHeaders: {}, allSubtitles: []
-                });
-            }
-        } catch (e) {}
-    }
-    return JSON.stringify({ type: "none" });
+async function readBody(response) {
+    if (!response) return "";
+    if (typeof response.text === 'function') return await response.text();
+    if (typeof response.data === 'string') return response.data;
+    return "";
 }
 
 function decodeEntities(text) {
     if (!text) return "";
     return String(text).replace(/&amp;/g, '&').replace(/&#039;|&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+}
+
+// ==========================================
+// 🔍 SEARCH
+// ==========================================
+async function searchResults(keyword) {
+    const searchUrl = `https://itachi.tv/search?q=${encodeURIComponent(keyword)}`;
+    const response = await soraFetch(searchUrl);
+    const html = await readBody(response);
+    
+    const results = [];
+    const seen = new Set();
+
+    // Aggressive Regex to rip /anime/... links directly out of the raw Next.js RSC payload or HTML
+    const regex = /(?:href="|"href":"|href:|\\")(\/anime\/\d+\/([^"'\\]+))/g;
+    let match;
+
+    while ((match = regex.exec(html)) !== null) {
+        const path = match[1]; // e.g., /anime/97940/black-clover
+        const slug = match[2]; // e.g., black-clover
+
+        if (seen.has(path)) continue;
+        seen.add(path);
+
+        // Fallback: format the slug into a clean title just in case the real title is heavily obfuscated
+        const fallbackTitle = slug.replace(/-/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+
+        // X-Ray the surrounding code chunk to pull out the real title and poster image
+        const snippet = html.substring(Math.max(0, match.index - 500), match.index + 500);
+        const titleMatch = snippet.match(/title="([^"]+)"/) || snippet.match(/"title":"([^"]+)"/) || snippet.match(/alt="([^"]+)"/);
+        const title = titleMatch ? titleMatch[1] : fallbackTitle;
+
+        let imgUrl = "";
+        const imgMatch = snippet.match(/_next\/image\?url=([^&"\\]+)/);
+        if (imgMatch) {
+            imgUrl = decodeURIComponent(imgMatch[1]);
+        } else {
+            const rawImgMatch = snippet.match(/<img[^>]+src="([^"\\]+)"/);
+            if (rawImgMatch) imgUrl = rawImgMatch[1];
+        }
+
+        results.push({
+            title: decodeEntities(title),
+            href: "https://itachi.tv" + path,
+            image: imgUrl
+        });
+    }
+    
+    return JSON.stringify(results);
+}
+
+// ==========================================
+// 📖 DETAILS & EPISODES
+// ==========================================
+async function extractDetails(url) {
+    return JSON.stringify([{ description: "Watch on Itachi TV", aliases: "Itachi", airdate: "" }]);
+}
+
+async function extractEpisodes(url) {
+    const response = await soraFetch(url);
+    const html = await readBody(response);
+    
+    const episodes = [];
+    const seen = new Set();
+
+    // Aggressive Regex for episode routes: /watch/97940/black-clover/1
+    const regex = /(?:href="|"href":"|href:|\\")(\/watch\/\d+\/[^\/]+\/(\d+))/g;
+    let match;
+
+    while ((match = regex.exec(html)) !== null) {
+        const path = match[1];
+        const epNumStr = match[2];
+        
+        if (seen.has(path)) continue;
+        seen.add(path);
+
+        const epNum = parseInt(epNumStr, 10);
+        
+        const snippet = html.substring(Math.max(0, match.index - 400), match.index + 400);
+        const epTitleMatch = snippet.match(/<p[^>]*truncate[^>]*>([^<]+)<\/p>/);
+        const epTitle = epTitleMatch ? decodeEntities(epTitleMatch[1].trim()) : `Episode ${epNum}`;
+
+        episodes.push({
+            title: epTitle,
+            href: "https://itachi.tv" + path,
+            number: epNum,
+            season: 1
+        });
+    }
+
+    // Ensure episodes are listed sequentially 
+    episodes.sort((a, b) => a.number - b.number);
+    return JSON.stringify(episodes);
+}
+
+// ==========================================
+// 🎬 PLAYBACK
+// ==========================================
+async function extractStreamUrl(url) {
+    const response = await soraFetch(url);
+    const html = await readBody(response);
+
+    const iframeMatch = html.match(/<iframe[^>]*src="([^"]+)"/);
+    
+    if (iframeMatch) {
+        const iframeUrl = iframeMatch[1].replace(/&amp;/g, '&');
+
+        try {
+            const iframeRes = await soraFetch(iframeUrl);
+            const iframeHtml = await readBody(iframeRes);
+
+            const fileMatch = iframeHtml.match(/['"](https:\/\/[^'"]+\.m3u8[^'"]*)['"]/);
+            if (fileMatch) {
+                return JSON.stringify({
+                    type: "servers",
+                    streams: [{
+                        title: "Itachi HLS",
+                        streamUrl: fileMatch[1],
+                        headers: { "User-Agent": UA }
+                    }],
+                    subtitles: "", subtitlesHeaders: {}, allSubtitles: []
+                });
+            }
+        } catch (e) {
+            console.error("Iframe extraction failed:", e);
+        }
+    }
+    
+    return JSON.stringify({ type: "none" });
 }
