@@ -1,4 +1,4 @@
-async function search(query) {
+async function searchResults(query) {
     const searchUrl = `https://itachi.tv/search?q=${encodeURIComponent(query)}`;
     const res = await fetch(searchUrl);
     const html = await res.text();
