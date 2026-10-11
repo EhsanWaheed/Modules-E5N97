@@ -35,28 +35,27 @@ function decodeEntities(text) {
 // 🔍 SEARCH
 // ==========================================
 async function searchResults(keyword) {
-    const searchUrl = `https://itachi.tv/search?q=${encodeURIComponent(keyword)}`;
+    // Hits the correct /browse endpoint found in the network logs
+    const searchUrl = `https://itachi.tv/browse?query=${encodeURIComponent(keyword)}`;
     const response = await soraFetch(searchUrl);
     const html = await readBody(response);
     
     const results = [];
     const seen = new Set();
 
-    // Aggressive Regex to rip /anime/... links directly out of the raw Next.js RSC payload or HTML
+    // Aggressive Regex to rip /anime/... links directly out of the raw payload
     const regex = /(?:href="|"href":"|href:|\\")(\/anime\/\d+\/([^"'\\]+))/g;
     let match;
 
     while ((match = regex.exec(html)) !== null) {
-        const path = match[1]; // e.g., /anime/97940/black-clover
-        const slug = match[2]; // e.g., black-clover
+        const path = match[1]; 
+        const slug = match[2]; 
 
         if (seen.has(path)) continue;
         seen.add(path);
 
-        // Fallback: format the slug into a clean title just in case the real title is heavily obfuscated
         const fallbackTitle = slug.replace(/-/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
 
-        // X-Ray the surrounding code chunk to pull out the real title and poster image
         const snippet = html.substring(Math.max(0, match.index - 500), match.index + 500);
         const titleMatch = snippet.match(/title="([^"]+)"/) || snippet.match(/"title":"([^"]+)"/) || snippet.match(/alt="([^"]+)"/);
         const title = titleMatch ? titleMatch[1] : fallbackTitle;
