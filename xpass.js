@@ -1,9 +1,10 @@
 // ==========================================
 // ⚙️ SORA MODULE — XPASS
 // ==========================================
-// XPass (play.xpass.top) is an embed host keyed by TMDB ids. It has no catalogue
-// of its own, so titles/episodes come from the keyless TMDB-shaped API at
-// bingebang.st (same ids) and only playback talks to XPass.
+// XPass (play.xpass.top) is an embed host keyed by TMDB or IMDb ids. It has no
+// catalogue of its own, so titles/seasons/episodes come from Cinemeta (Stremio's
+// free, keyless catalogue, which carries both ids) and only playback talks to
+// XPass. Do not use another site's internal ids here: they are not TMDB ids.
 //
 // Playback (reverse-engineered from the site's own player scripts):
 //   1. GET /e/movie/<id>  or  /e/tv/<id>/<season>/<episode>
@@ -22,8 +23,8 @@
 // JSON, which is reported in the log.
 
 const XP_BASE = "https://play.xpass.top";
-const XP_META = "https://bingebang.st/api";
-const XP_IMG = "https://image.tmdb.org/t/p/w342";
+const XP_META = "https://v3-cinemeta.strem.io";
+const XP_MAX_RESULTS = 10;     // per kind (series / movies)
 const XP_FALLBACK_BUILD = "spv3-build-1787821613-50e5fc97c9dce367";
 const XP_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
 
@@ -72,7 +73,7 @@ async function getText(url, headers) {
 }
 
 async function metaApi(path) {
-    const body = await getText(`${XP_META}/${path}`, { "Accept": "application/json", "Referer": "https://bingebang.st/" });
+    const body = await getText(`${XP_META}/${path}`, { "Accept": "application/json" });
     if (!body) return null;
     try { return JSON.parse(body); } catch (e) { return null; }
 }
@@ -81,43 +82,49 @@ async function metaApi(path) {
 // 🔍 SEARCH
 // ==========================================
 
-// href = xp://<movie|tv>/<id>[/<season_number>]
+// Seasons that really have episodes (season 0 = specials, skipped).
+function seasonList(meta) {
+    const seen = {};
+    const list = [];
+    const videos = meta && Array.isArray(meta.videos) ? meta.videos : [];
+    for (const v of videos) {
+        if (v && v.season > 0 && !seen[v.season]) { seen[v.season] = 1; list.push(v.season); }
+    }
+    return list.sort((a, b) => a - b);
+}
+
+// href = xp://<movie|series>/<imdb id>[/<season>]
 // Multi-season shows are returned one entry per season so every season has its
 // own episode list.
 async function searchResults(keyword) {
     try {
-        const data = await metaApi(`search/multi?query=${encodeURIComponent(keyword)}`);
-        const list = data && Array.isArray(data.results) ? data.results : [];
-        const items = list.filter(r => (r.media_type === "movie" || r.media_type === "tv")
-            && (r.media_type === "tv" ? (r.name || r.original_name) : (r.title || r.original_title)));
+        const q = encodeURIComponent(keyword);
+        const [seriesData, movieData] = await Promise.all([
+            metaApi(`catalog/series/top/search=${q}.json`),
+            metaApi(`catalog/movie/top/search=${q}.json`)
+        ]);
+        const series = ((seriesData && seriesData.metas) || []).filter(m => m && /^tt\d+$/.test(m.id)).slice(0, XP_MAX_RESULTS);
+        const movies = ((movieData && movieData.metas) || []).filter(m => m && /^tt\d+$/.test(m.id)).slice(0, XP_MAX_RESULTS);
 
-        // The search payload only has a season *count*, which can disagree with
-        // the seasons that exist, so read the real list for multi-season shows.
-        const details = await Promise.all(items.map(r =>
-            r.media_type === "tv" && (r.number_of_seasons || 0) > 1
-                ? metaApi(`tv/${r.id}`).catch(() => null)
-                : Promise.resolve(null)
+        const metas = await Promise.all(series.map(m =>
+            metaApi(`meta/series/${m.id}.json`).catch(() => null)
         ));
 
         const results = [];
-        items.forEach((r, i) => {
-            const title = r.media_type === "tv" ? (r.name || r.original_name) : (r.title || r.original_title);
-            const label = r.year ? `${title} (${r.year})` : title;
-            const image = r.poster_path ? `${XP_IMG}${r.poster_path}` : "";
-
-            let seasons = [];
-            const d = details[i];
-            if (d && Array.isArray(d.seasons)) seasons = d.seasons.filter(x => x.season_number > 0);
-            if (r.media_type === "tv" && seasons.length > 1) {
-                for (const se of seasons) {
-                    const n = se.season_number;
-                    const name = n < 100 ? `Season ${n}` : (se.name || `Season ${n}`);
-                    results.push({ title: `${label} · ${name}`, image: image, href: `xp://tv/${r.id}/${n}` });
-                }
+        series.forEach((m, i) => {
+            const label = m.releaseInfo ? `${m.name} (${m.releaseInfo})` : m.name;
+            const image = m.poster || "";
+            const detail = metas[i] && metas[i].meta;
+            const seasons = seasonList(detail);
+            if (seasons.length > 1) {
+                for (const n of seasons) results.push({ title: `${label} · Season ${n}`, image: image, href: `xp://series/${m.id}/${n}` });
             } else {
-                results.push({ title: label, image: image, href: `xp://${r.media_type}/${r.id}` });
+                results.push({ title: label, image: image, href: `xp://series/${m.id}` });
             }
         });
+        for (const m of movies) {
+            results.push({ title: m.releaseInfo ? `${m.name} (${m.releaseInfo})` : m.name, image: m.poster || "", href: `xp://movie/${m.id}` });
+        }
         return JSON.stringify(results);
     } catch (error) {
         return JSON.stringify([]);
@@ -136,17 +143,16 @@ function parseHref(url) {
 async function extractDetails(url) {
     const ref = parseHref(url);
     try {
-        const d = await metaApi(`${ref.type}/${ref.id}`);
+        const data = await metaApi(`meta/${ref.type}/${ref.id}.json`);
+        const d = data && data.meta;
         if (!d) throw new Error("no data");
 
-        const genres = Array.isArray(d.genres) ? d.genres.map(g => g.name).join(", ") : "";
-        const aliases = [d.original_name || d.original_title, d.tagline, genres]
-            .filter(x => x).join(" | ");
-        const date = d.first_air_date || d.release_date || "";
-        const airdate = [date, d.status].filter(x => x).join(" · ");
+        const genres = Array.isArray(d.genres) ? d.genres.join(", ") : (Array.isArray(d.genre) ? d.genre.join(", ") : "");
+        const aliases = [d.runtime ? `Runtime: ${d.runtime}` : "", genres].filter(x => x).join(" | ");
+        const airdate = [d.releaseInfo || d.year || "", d.status || ""].filter(x => x).join(" · ");
 
         return JSON.stringify([{
-            description: d.overview || "No synopsis available.",
+            description: d.description || "No synopsis available.",
             aliases: aliases,
             airdate: airdate
         }]);
@@ -159,44 +165,38 @@ async function extractDetails(url) {
 // 📂 EPISODES
 // ==========================================
 
+// XPass takes the TMDB id when we have it (its default), else the IMDb id.
+function playId(meta) {
+    return (meta && meta.moviedb_id) ? String(meta.moviedb_id) : String(meta && meta.imdb_id || meta && meta.id);
+}
+
 // Episode href = xp-play://movie/<id>  or  xp-play://tv/<id>/<season>/<episode>
 async function extractEpisodes(url) {
     const ref = parseHref(url);
     try {
+        const data = await metaApi(`meta/${ref.type}/${ref.id}.json`);
+        const meta = data && data.meta;
+        if (!meta) return JSON.stringify([]);
+        const id = playId(meta);
+
         if (ref.type === "movie") {
-            return JSON.stringify([{ href: `xp-play://movie/${ref.id}`, number: 1, season: 1, title: "Full Movie" }]);
+            return JSON.stringify([{ href: `xp-play://movie/${id}`, number: 1, season: 1, title: meta.name || "Full Movie" }]);
         }
 
-        const d = await metaApi(`tv/${ref.id}`);
-        if (!d) return JSON.stringify([]);
+        const videos = (Array.isArray(meta.videos) ? meta.videos : [])
+            .filter(v => v && v.season > 0 && (v.episode || v.number) > 0)
+            .filter(v => ref.season === null || isNaN(ref.season) || v.season === ref.season)
+            .sort((a, b) => a.season - b.season || (a.episode || a.number) - (b.episode || b.number));
 
-        let seasonNumbers = Array.isArray(d.seasons)
-            ? d.seasons.map(x => x.season_number).filter(n => n > 0)
-            : [];
-        if (seasonNumbers.length === 0) {
-            const total = parseInt(d.number_of_seasons, 10) || 1;
-            for (let n = 1; n <= total; n++) seasonNumbers.push(n);
-        }
-
-        let wanted = seasonNumbers;
-        if (ref.season !== null && !isNaN(ref.season)) wanted = seasonNumbers.filter(n => n === ref.season);
-
-        const episodes = [];
-        const fetched = await Promise.all(wanted.map(n => metaApi(`tv/${ref.id}/season/${n}`)));
-        fetched.forEach((sd, i) => {
-            const seasonNumber = wanted[i];
-            const shown = seasonNumber < 100 ? seasonNumber : seasonNumbers.indexOf(seasonNumber) + 1;
-            const eps = sd && Array.isArray(sd.episodes) ? sd.episodes : [];
-            for (const ep of eps) {
-                episodes.push({
-                    href: `xp-play://tv/${ref.id}/${seasonNumber}/${ep.episode_number}`,
-                    number: ep.episode_number,
-                    season: shown,
-                    title: ep.name || `Episode ${ep.episode_number}`
-                });
-            }
-        });
-        return JSON.stringify(episodes);
+        return JSON.stringify(videos.map(v => {
+            const n = v.episode || v.number;
+            return {
+                href: `xp-play://tv/${id}/${v.season}/${n}`,
+                number: n,
+                season: v.season,
+                title: v.name || v.title || `Episode ${n}`
+            };
+        }));
     } catch (error) {
         return JSON.stringify([]);
     }
