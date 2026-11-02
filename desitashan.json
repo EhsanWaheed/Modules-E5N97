@@ -1,0 +1,20 @@
+{
+    "sourceName": "Desi Tashan",
+    "iconUrl": "https://www.google.com/s2/favicons?sz=128&domain_url=desitashan.su",
+    "author": {
+        "name": "Ehsan",
+        "icon": "https://github.com/github.png",
+        "url": "https://github.com/EhsanWaheed"
+    },
+    "version": "1.0.0",
+    "language": "Hindi",
+    "streamType": "MP4",
+    "quality": "720p",
+    "baseUrl": "https://www.desitashan.su/",
+    "searchBaseUrl": "https://www.desitashan.su/search.php?s=%s",
+    "scriptUrl": "https://raw.githubusercontent.com/EhsanWaheed/Modules-E5N97/add-desitashan-module/desitashan.js",
+    "type": "shows",
+    "downloadSupport": false,
+    "asyncJS": true,
+    "softsub": false
+}
