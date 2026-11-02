@@ -23,14 +23,19 @@
 //   No cookies are needed anywhere. Every play starts a fresh chain because
 //   the tokens expire after about 10 minutes.
 //
-// Sora can only offer streams as alternatives, so each part is listed as its
-// own stream ("Part 1/7", ...). Play them in order.
+// Sora cannot join files or autoplay streams, so every part is its own list
+// entry ("Ep 30 · Part 1/7"): the app's next-item button then walks through the
+// whole episode. The part count is read from the episode page (the link-host
+// URL carries part2..partN), costing one cheap request per episode.
 
 const DT_BASE = "https://www.desitashan.su";
 const DT_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
 
 const DT_SEARCH_PAGES = 3;     // search pages read (12 episodes each)
-const DT_MAX_LIST_PAGES = 25;  // category pages read (20 episodes each)
+const DT_MAX_LIST_PAGES = 10;  // listing pages read (12-20 episodes each)
+const DT_MAX_EPISODES = 120;   // newest episodes listed for a show
+const DT_PART_PROBES = 24;     // newest episodes whose part count is read exactly
+const DT_PROBE_BATCH = 8;      // episode pages fetched in parallel
 const DT_TIMEOUT_MS = 15000;
 
 // Category slugs that are TV channels rather than shows.
@@ -243,7 +248,27 @@ async function listingPages(firstUrl, pageUrl, pageRe) {
     return [first].concat(await Promise.all(rest));
 }
 
-// href = dt-play://<episode path>
+// The link-host URL on an episode page carries v (part 1) plus part2..partN.
+function partCount(pageHtml) {
+    if (!/getlink\.php\?/.test(pageHtml)) return 0;
+    let count = 1;
+    const re = /(?:&amp;|&|\?)part(\d+)=/g;
+    let m;
+    while ((m = re.exec(pageHtml)) !== null) count = Math.max(count, parseInt(m[1], 10));
+    return count;
+}
+
+function mostCommon(values, fallback) {
+    const tally = {};
+    let best = fallback, bestCount = 0;
+    for (const v of values) {
+        tally[v] = (tally[v] || 0) + 1;
+        if (tally[v] > bestCount) { bestCount = tally[v]; best = v; }
+    }
+    return best;
+}
+
+// href = dt-play://<episode path>|<part number>
 async function extractEpisodes(url) {
     const show = parseShow(url);
     try {
@@ -256,26 +281,44 @@ async function extractEpisodes(url) {
             htmls = await listingPages(`/category/${show.path}/`, p => `/category/${show.path}/page/${p}/`, /\/page\/(\d+)\//g);
         }
 
-        const cards = [];
+        let cards = [];
         const seen = {};
         for (const html of htmls) {
             for (const card of parseCards(html)) {
                 if (keep(card) && !seen[card.path]) { seen[card.path] = true; cards.push(card); }
             }
         }
+        cards = cards.slice(0, DT_MAX_EPISODES);                    // newest first
 
-        // The site lists newest first; Sora wants ascending numbers.
+        // Exact part counts for the newest episodes; older ones assume the
+        // most common count (a show splits its episodes the same way).
+        const counts = {};
+        const probe = cards.slice(0, DT_PART_PROBES);
+        for (let i = 0; i < probe.length; i += DT_PROBE_BATCH) {
+            const batch = probe.slice(i, i + DT_PROBE_BATCH);
+            const pages = await Promise.all(batch.map(card => dtGet(card.path)));
+            batch.forEach((card, j) => { const n = partCount(pages[j]); if (n > 0) counts[card.path] = n; });
+        }
+        const usual = mostCommon(Object.keys(counts).map(k => counts[k]), 1);
+
+        // Ascending order; every part becomes its own entry.
         cards.reverse();
-        const episodes = cards.map((card, i) => {
-            const number = card.number !== null ? card.number : i + 1;
-            return {
-                href: `dt-play://${card.path}`,
-                number: number,
-                season: 1,
-                title: card.date ? `Episode ${number} · ${card.date}` : `Episode ${number}`
-            };
+        const episodes = [];
+        let running = 0;
+        cards.forEach((card, i) => {
+            const episodeNumber = card.number !== null ? card.number : i + 1;
+            const parts = counts[card.path] || usual;
+            for (let part = 1; part <= parts; part++) {
+                running++;
+                const label = parts > 1 ? `Ep ${episodeNumber} · Part ${part}/${parts}` : `Ep ${episodeNumber}`;
+                episodes.push({
+                    href: `dt-play://${card.path}|${part}`,
+                    number: running,
+                    season: 1,
+                    title: card.date ? `${label} · ${card.date}` : label
+                });
+            }
         });
-        episodes.sort((a, b) => a.number - b.number);
         return JSON.stringify(episodes);
     } catch (error) {
         return JSON.stringify([]);
@@ -345,7 +388,10 @@ function resolveHref(ref, base) {
 // ==========================================
 
 async function extractStreamUrl(url) {
-    const path = String(url).replace('dt-play://', '');
+    const raw = String(url).replace('dt-play://', '');
+    const split = raw.lastIndexOf('|');
+    const path = split >= 0 ? raw.slice(0, split) : raw;
+    const wantedPart = split >= 0 ? parseInt(raw.slice(split + 1), 10) : null;     // null = every part
     const pageUrl = absolute(path);
     try {
         // 1. episode page -> link-host URL
@@ -388,7 +434,12 @@ async function extractStreamUrl(url) {
             return JSON.stringify({ type: "none" });
         }
         const embedUrl = `https://freezod.com${articlePath}`;
-        const names = Object.keys(parts).sort((a, b) => parseInt(a.replace(/\D/g, ''), 10) - parseInt(b.replace(/\D/g, ''), 10));
+        const allNames = Object.keys(parts).sort((a, b) => parseInt(a.replace(/\D/g, ''), 10) - parseInt(b.replace(/\D/g, ''), 10));
+        const names = (wantedPart && wantedPart >= 1 && wantedPart <= allNames.length) ? [allNames[wantedPart - 1]] : allNames;
+        if (wantedPart && !(wantedPart >= 1 && wantedPart <= allNames.length)) {
+            console.log(`[Player] DesiTashan: part ${wantedPart} does not exist (episode has ${allNames.length})`);
+            return JSON.stringify({ type: "none" });
+        }
 
         // 4. each part -> media_meta -> play.php (302 to the signed MP4)
         const resolved = await Promise.all(names.map(async (name) => {
@@ -405,7 +456,8 @@ async function extractStreamUrl(url) {
 
         const streams = [];
         resolved.forEach((link, i) => {
-            if (link) streams.push({ title: `Part ${i + 1}/${names.length}`, streamUrl: link, headers: {} });
+            const number = wantedPart || (i + 1);
+            if (link) streams.push({ title: `Part ${number}/${allNames.length}`, streamUrl: link, headers: {} });
         });
 
         if (streams.length === 0) {
