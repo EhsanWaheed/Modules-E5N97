@@ -1,0 +1,20 @@
+{
+    "sourceName": "XPass",
+    "iconUrl": "https://www.google.com/s2/favicons?sz=128&domain_url=xpass.top",
+    "author": {
+        "name": "Ehsan",
+        "icon": "https://github.com/github.png",
+        "url": "https://github.com/EhsanWaheed"
+    },
+    "version": "1.0.0",
+    "language": "English (SUB)",
+    "streamType": "HLS",
+    "quality": "1080p",
+    "baseUrl": "https://play.xpass.top/",
+    "searchBaseUrl": "https://bingebang.st/search?q=%s",
+    "scriptUrl": "https://raw.githubusercontent.com/EhsanWaheed/Modules-E5N97/add-xpass-module/xpass.js",
+    "type": "movies",
+    "downloadSupport": false,
+    "asyncJS": true,
+    "softsub": false
+}
