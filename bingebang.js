@@ -394,15 +394,25 @@ async function extractStreamUrl(url) {
 
         const sources = await bbSecure("/api/player/sources", ticket, pageUrl);
         const servers = sources && sources.ok && Array.isArray(sources.servers) ? sources.servers : [];
-        if (servers.length === 0) return JSON.stringify({ type: "none" });
+        if (servers.length === 0) {
+            console.log(`[Player] BingeBang sources empty${sources && sources.error ? ": " + sources.error : ""}${sources && sources.status ? " (status " + sources.status + ")" : ""}`);
+            return JSON.stringify({ type: "none" });
+        }
 
-        const resolved = await Promise.all(servers.map(srv =>
-            bbSecure(`/api/player/resolve?src=${encodeURIComponent(srv.source_url)}`, ticket, pageUrl)
-                .then(r => ({ srv: srv, r: r })).catch(() => ({ srv: srv, r: null }))
-        ));
-
-        for (const { srv, r } of resolved) {
-            if (!r || !r.ok || !r.url) continue;
+        // Resolve one server at a time and stop at the first that works, as
+        // the site's own player does. Every resolve counts against a rate
+        // limit, so resolving all servers up front can get the viewer a 429.
+        for (const srv of servers) {
+            const r = await bbSecure(`/api/player/resolve?src=${encodeURIComponent(srv.source_url)}`, ticket, pageUrl)
+                .catch(() => null);
+            if (r && r.status === 429) {
+                console.log(`[Player] BingeBang rate limited, retry after ${r.retry_after || "?"}s`);
+                break;
+            }
+            if (!r || !r.ok || !r.url) {
+                console.log(`[Player] BingeBang server "${srv.label}" did not resolve${r && r.error ? ": " + r.error : ""}`);
+                continue;
+            }
             const name = srv.label || "Server";
             const add = (label, link) => {
                 if (!link || streams.some(s => s.streamUrl === link)) return;
@@ -415,6 +425,7 @@ async function extractStreamUrl(url) {
             const qualities = parseQualities(r.qualities);
             if (qualities.length > 0) qualities.forEach(q => add(q.label, q.url));
             else add(srv.quality || "", r.url);
+            if (streams.length > 0) break;
         }
 
         if (streams.length === 0) return JSON.stringify({ type: "none" });
