@@ -434,11 +434,53 @@ async function discoverBuild(embedHtml) {
     return XP_FALLBACK_BUILD;
 }
 
+// Absolute url for a playlist entry.
+function resolveUrl(ref, base) {
+    if (/^https?:\/\//i.test(ref)) return ref;
+    const origin = (base.match(/^https?:\/\/[^\/]+/) || [""])[0];
+    if (ref.charAt(0) === '/') return origin + ref;
+    return base.replace(/[?#].*$/, '').replace(/[^\/]*$/, '') + ref;
+}
+
+function firstUri(playlist) {
+    const lines = String(playlist).split(/\r?\n/);
+    for (const line of lines) {
+        const t = line.trim();
+        if (t && t.charAt(0) !== '#') return t;
+    }
+    return "";
+}
+
+// GET a small slice and report whether it looks like real media (not a 403 page).
+async function probeSegment(link, headers) {
+    const h = Object.assign({}, headers, { "Range": "bytes=0-1023" });
+    const response = await withTimeout(soraFetch(link, { method: 'GET', headers: h }), XP_TIMEOUT_MS);
+    if (!response) return false;
+    if (typeof response.status === 'number' && response.status >= 400) return false;
+    const body = await withTimeout(readBody(response), XP_TIMEOUT_MS) || "";
+    if (body.length === 0) return false;
+    return !(body.length < 600 && /forbidden|denied|permission|not found|<html|error/i.test(body));
+}
+
+// Many hosts are dead, and some serve a playlist but refuse the video segments
+// (403). Follow the playlist down to its first segment and only keep streams
+// whose segment can really be fetched, from this device.
 async function checkStream(link, type, headers) {
-    // Many hosts are dead; only keep HLS playlists that really answer.
     if (!(type === "hls" || /\.m3u8(\?|$)/i.test(link))) return true;
-    const body = await getText(link, headers);
-    return body.indexOf("#EXTM3U") === 0;
+    const master = await getText(link, headers);
+    if (master.indexOf("#EXTM3U") !== 0) return false;
+
+    let playlist = master, base = link;
+    if (master.indexOf("#EXT-X-STREAM-INF") >= 0) {
+        const variant = firstUri(master);
+        if (!variant) return false;
+        base = resolveUrl(variant, link);
+        playlist = await getText(base, headers);
+        if (playlist.indexOf("#EXTM3U") !== 0) return false;
+    }
+    const segment = firstUri(playlist);
+    if (!segment) return false;
+    return await probeSegment(resolveUrl(segment, base), headers);
 }
 
 async function extractStreamUrl(url) {
@@ -470,7 +512,8 @@ async function extractStreamUrl(url) {
             return JSON.stringify({ type: "none" });
         }
 
-        const streamHeaders = { "Origin": XP_BASE, "Referer": `${XP_BASE}/`, "User-Agent": XP_UA };
+        // Referer only: sending Origin as well makes some hosts (e.g. vip.1x2.space) answer 403.
+        const streamHeaders = { "Referer": `${XP_BASE}/`, "User-Agent": XP_UA };
 
         for (let i = 0; i < servers.length && streams.length < XP_MAX_STREAMS; i += XP_BATCH) {
             const batch = servers.slice(i, i + XP_BATCH);
