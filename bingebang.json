@@ -1,0 +1,20 @@
+{
+    "sourceName": "BingeBang",
+    "iconUrl": "https://www.google.com/s2/favicons?sz=128&domain_url=bingebang.st",
+    "author": {
+        "name": "Ehsan",
+        "icon": "https://github.com/github.png",
+        "url": "https://github.com/EhsanWaheed"
+    },
+    "version": "1.0.0",
+    "language": "English (SUB/DUB)",
+    "streamType": "HLS",
+    "quality": "1080p",
+    "baseUrl": "https://bingebang.st/",
+    "searchBaseUrl": "https://bingebang.st/search?q=%s",
+    "scriptUrl": "https://raw.githubusercontent.com/EhsanWaheed/Modules-E5N97/main/bingebang.js",
+    "type": "anime",
+    "downloadSupport": false,
+    "asyncJS": true,
+    "softsub": true
+}
