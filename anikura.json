@@ -12,7 +12,7 @@
     "quality": "1080p",
     "baseUrl": "https://anikura.club/",
     "searchBaseUrl": "https://anikura.club/library?q=%s",
-    "scriptUrl": "https://raw.githubusercontent.com/EhsanWaheed/Modules-E5N97/fix-anikura-module/anikura.js",
+    "scriptUrl": "https://raw.githubusercontent.com/EhsanWaheed/Modules-E5N97/main/anikura.js",
     "type": "anime",
     "downloadSupport": false,
     "asyncJS": true,
