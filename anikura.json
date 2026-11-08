@@ -1,0 +1,20 @@
+{
+    "sourceName": "Anikura",
+    "iconUrl": "https://www.google.com/s2/favicons?sz=128&domain_url=anikura.club",
+    "author": {
+        "name": "Ehsan",
+        "icon": "https://github.com/github.png",
+        "url": "https://github.com/EhsanWaheed"
+    },
+    "version": "1.0.1",
+    "language": "English (SUB/DUB)",
+    "streamType": "HLS",
+    "quality": "1080p",
+    "baseUrl": "https://anikura.club/",
+    "searchBaseUrl": "https://anikura.club/library?q=%s",
+    "scriptUrl": "https://raw.githubusercontent.com/EhsanWaheed/Modules-E5N97/fix-anikura-module/anikura.js",
+    "type": "anime",
+    "downloadSupport": false,
+    "asyncJS": true,
+    "softsub": false
+}
